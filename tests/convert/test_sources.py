@@ -78,3 +78,13 @@ def test_row_fp8_source_and_reordered_encoded_rows(tmp_path):
         words = reordered.read_encoded(0, 2)
         assert torch.equal(words.codes, codes.flip(0))
         assert torch.equal(words.scales, scales.flatten().flip(0))
+
+
+def test_source_reads_every_byte_value(tmp_path):
+    # 0x1A, 0x0D and 0x0A are text-mode control bytes on Windows; a read must
+    # return every byte of a payload that contains them.
+    words = torch.arange(256, dtype=torch.uint8).repeat(64)
+    save_file({"proj.weight_packed": words}, str(tmp_path / "model.safetensors"))
+    with SafetensorsSource(tmp_path) as store:
+        assert torch.equal(store.read_flat("proj.weight_packed"), words)
+        assert torch.equal(store.read_flat("proj.weight_packed", 26, 300), words[26:300])

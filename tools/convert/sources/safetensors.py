@@ -25,7 +25,7 @@ else:
         original = os.lseek(fd, 0, os.SEEK_CUR)
         os.lseek(fd, offset, os.SEEK_SET)
         data = os.read(fd, length)
-        os.lseek(fd, original, os.SEEK_CUR)
+        os.lseek(fd, original, os.SEEK_SET)
         return data
 
 _DTYPES = {
@@ -132,7 +132,8 @@ class SafetensorsSource:
             _, fd = self._fds.popitem(last=False)
             discard_cached_pages(fd)
             os.close(fd)
-        fd = os.open(path, os.O_RDONLY)
+        # O_BINARY: a Windows text-mode fd ends a read at the first 0x1A byte.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
         self._fds[path] = fd
         return fd
 

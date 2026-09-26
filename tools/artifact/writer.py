@@ -38,7 +38,7 @@ else:
         original = os.lseek(fd, 0, os.SEEK_CUR)
         os.lseek(fd, offset, os.SEEK_SET)
         count = os.write(fd, data)
-        os.lseek(fd, original, os.SEEK_CUR)
+        os.lseek(fd, original, os.SEEK_SET)
         return count
 
 
