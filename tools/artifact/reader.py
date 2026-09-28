@@ -34,7 +34,7 @@ else:
         original = os.lseek(fd, 0, os.SEEK_CUR)
         os.lseek(fd, offset, os.SEEK_SET)
         data = os.read(fd, length)
-        os.lseek(fd, original, os.SEEK_CUR)
+        os.lseek(fd, original, os.SEEK_SET)
         return data
 
 
@@ -46,7 +46,8 @@ class Artifact:
         self._fds: dict[int, int] = {}
         self._validated: set[str] = set()
         try:
-            fd = os.open(self.path, os.O_RDONLY)
+            # O_BINARY: a Windows text-mode fd ends a read at the first 0x1A byte.
+            fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
             self._fds[0] = fd
             entry_bytes = os.fstat(fd).st_size
             raw = _pread(fd, HEADER.size, 0)
@@ -112,7 +113,7 @@ class Artifact:
             return self._fds[index]
         file = self.directory.files[index]
         path = self.path.parent / file.path
-        fd = os.open(path, os.O_RDONLY)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
         try:
             raw = _pread(fd, HEADER.size, 0)
             if len(raw) != HEADER.size:
