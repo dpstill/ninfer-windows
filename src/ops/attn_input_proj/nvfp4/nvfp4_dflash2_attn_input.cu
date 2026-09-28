@@ -2,10 +2,9 @@
 
 #include "core/device.h"
 #include "ops/common/token_slices.h"
+#include "ops/linear/nvfp4/nvfp4_a16_simt.cuh"
 #include "ops/linear/nvfp4/nvfp4_dflash2_geometry.h"
-#include "ops/linear/nvfp4/nvfp4_gemv.cuh"
-#include "ops/linear/nvfp4/nvfp4_output.cuh"
-#include "ops/linear/nvfp4/nvfp4_simt.cuh"
+#include "ops/linear/nvfp4/nvfp4_split_output3.cuh"
 
 #include <algorithm>
 #include <array>
@@ -32,45 +31,52 @@ struct Nvfp4DFlash2AttentionSmallTProductionSchedule {
                                                   ? Nvfp4SimtActivationAccess::SharedPhase
                                                   : Nvfp4SimtActivationAccess::TokenPacked;
     using Type =
-        Nvfp4SimtSchedule<kWarpsPerCta, 1, 2, kValuesPerLane, ActiveTokens, 1, kActivationAccess,
-                          Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
-                          Nvfp4SimtBlockOrder::RowsContiguous, 1>;
+        Nvfp4A16SimtSchedule<kWarpsPerCta, 1, 2, kValuesPerLane, ActiveTokens, 1, kActivationAccess,
+                             Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
+                             Nvfp4SimtBlockOrder::RowsContiguous, 1>;
 };
 
 void launch_decode(const Tensor& x, const Weight& weight, Tensor& q, Tensor& k, Tensor& v,
                    cudaStream_t stream) {
     using Schedule =
-        Nvfp4GemvSchedule<8, 2, 16, 4, Nvfp4ScaleAccess::StagedRaw, Nvfp4CodeCache::Default, 2>;
+        Nvfp4ScheduleInstance<Nvfp4A16GemvSchedule<8, 2, 16, 4, Nvfp4ScaleAccess::StagedRaw,
+                                                   Nvfp4CodeCache::Default, 2>,
+                              Geometry::kInputRows>;
 
     const Output output{static_cast<__nv_bfloat16*>(q.data), static_cast<__nv_bfloat16*>(k.data),
                         static_cast<__nv_bfloat16*>(v.data)};
-    constexpr int kBlocks              = Geometry::kOutputRows / Schedule::kRowsPerCta;
+    constexpr int kBlocks              = Geometry::kOutputRows / Schedule::kBlockRows;
     const float inverse_weight_divisor = 1.0F / weight.weight_scale_divisor;
-    nvfp4_gemv_kernel<Geometry, Schedule, Nvfp4IdentityEpilogue, Output>
+    nvfp4_a16_gemv_kernel<Schedule, Output, LinearIdentityEpilogue, Nvfp4IdentityRows>
         <<<dim3(kBlocks), dim3(Schedule::kThreads), 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(weight.qdata),
             static_cast<const std::uint8_t*>(weight.scales), inverse_weight_divisor,
-            Nvfp4IdentityEpilogue{}, output);
+            output, LinearIdentityEpilogue{}, Nvfp4IdentityRows{}, Geometry::kOutputRows);
     CUDA_CHECK(cudaGetLastError());
 }
 
 template <int ActiveTokens>
 void launch_exact(const Tensor& x, const Weight& weight, Tensor& q, Tensor& k, Tensor& v,
                   cudaStream_t stream) {
-    using Schedule            = typename Nvfp4DFlash2AttentionSmallTProductionSchedule<ActiveTokens>::Type;
-    constexpr int kTokenTiles = (ActiveTokens + Schedule::kTokenTile - 1) / Schedule::kTokenTile;
-    constexpr int kBlocks     = (Geometry::kOutputRows / Schedule::kRowsPerCta) * kTokenTiles;
+    using Schedule =
+        Nvfp4ScheduleInstance<typename Nvfp4DFlash2AttentionSmallTProductionSchedule
+                                  <ActiveTokens>::Type,
+                              Geometry::kInputRows, ActiveTokens, true>;
+    constexpr int kTokenTiles =
+        (ActiveTokens + Schedule::kBlockTokens - 1) / Schedule::kBlockTokens;
+    constexpr int kBlocks     = (Geometry::kOutputRows / Schedule::kBlockRows) * kTokenTiles;
 
     const Output output{static_cast<__nv_bfloat16*>(q.data), static_cast<__nv_bfloat16*>(k.data),
                         static_cast<__nv_bfloat16*>(v.data)};
     const float inverse_weight_divisor = 1.0F / weight.weight_scale_divisor;
-    nvfp4_simt_kernel<Geometry, ActiveTokens, Schedule, Nvfp4IdentityEpilogue, Output>
+    nvfp4_a16_simt_kernel<Schedule, Output, LinearIdentityEpilogue, Nvfp4IdentityRows>
         <<<dim3(kBlocks), dim3(Schedule::kThreads), 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(weight.qdata),
             static_cast<const std::uint8_t*>(weight.scales), inverse_weight_divisor,
-            Nvfp4IdentityEpilogue{}, output);
+            output, LinearIdentityEpilogue{}, Nvfp4IdentityRows{}, Geometry::kOutputRows,
+            ActiveTokens);
     CUDA_CHECK(cudaGetLastError());
 }
 
