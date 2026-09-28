@@ -29,12 +29,9 @@ The current engine requires v3 artifacts. Existing official v2 downloads can be
 [upgraded locally](docs/weight-conversion.md#upgrade-an-existing-v2-artifact) without downloading
 the weights again.
 
-The current Qwen3.8 `groupwise-int` and `nvfp4` artifacts include DFlash2 companion weights;
-select `--spec dflash2 --draft-tokens 7 --lm-head-draft` in a current source build (portable
-v0.6.1 predates this backend). The `nvfp4full` (Qwen3.8-27B NVFP4F) artifact does not include
-DFlash2 companion weights, so `--spec dflash2` is currently unsupported on it. Older Qwen3.8
-artifacts remain usable for Text, Vision and MTP in the current build, but cannot enable
-DFlash2. See [DFlash2 on Windows](docs/windows.md#dflash2) for launch and validation commands.
+The current Qwen3.8 artifacts (`groupwise-int`, `nvfp4` and `nvfp4full`) include DFlash2
+companion weights; select `--spec dflash2 --draft-tokens 7 --lm-head-draft`. See
+[DFlash2 on Windows](docs/windows.md#dflash2) for launch and validation commands.
 
 Qwen3.6-27B exposes two registered weight profiles (`groupwise-int` and `nvfp4`); Qwen3.8-27B
 exposes three, adding `nvfp4full`. The artifact identity selects the profile without a

@@ -92,10 +92,9 @@ localhost, pass `--host 0.0.0.0` and allow TCP 8080 through Windows Firewall for
 
 ## DFlash2
 
-Qwen3.8-27B supports DFlash2 with the current `groupwise-int` and `nvfp4` artifacts containing
-the complete 66-object `dflash2/` suffix. Older artifacts can still run Text, Vision and MTP
-with this build, but selecting DFlash2 reports the missing capability. Portable v0.6.1 predates
-DFlash2; build the current source for this backend.
+Qwen3.8-27B supports DFlash2 with the current `groupwise-int`, `nvfp4` and `nvfp4full`
+artifacts containing the complete `dflash2/` companion suffix. Artifacts without the
+companion weights report the missing capability when DFlash2 is selected.
 
 ```powershell
 .\build-windows\apps\Release\ninfer-serve.exe models\qwen3_8_27b_nvfp4.ninfer `
