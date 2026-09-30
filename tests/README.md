@@ -75,6 +75,10 @@ The suite covers prefill, decode/spec widths, batched prefixes, cache effects, a
 updates with changing live lengths. Numerical cases include small, unit-RMS and RMS1.8 Q/K inputs.
 The FP64 oracle retains internal Q quantization error; the INT8/FP8 compute budgets account for
 that accepted approximation. The default invocation also runs packed and context attention.
+Large causal reference calculations use at most eight CPU workers while preserving each output's
+FP64 accumulation order; small cases remain serial. Cache fixtures populate the reachable KV
+prefix while reserving the full execution-envelope page table. The runner reports elapsed time
+per KV type.
 
 Linear tests are independently runnable by weight and activation-compute profile:
 

@@ -343,11 +343,11 @@ public:
     [[nodiscard]] KVExecutionRowLease acquire(std::int32_t row);
 
     void publish(KVExecutionRowHandle row, std::uint32_t logical_begin,
-                 std::span<const DeviceKVPageHandle> pages, cudaStream_t stream = nullptr);
+                 std::span<const DeviceKVPageHandle> pages, cudaStream_t stream);
     void publish(KVExecutionRowHandle row, std::uint32_t logical_begin,
-                 std::span<const DeviceKVPageLease> pages, cudaStream_t stream = nullptr);
+                 std::span<const DeviceKVPageLease> pages, cudaStream_t stream);
     void publish_repeated(KVExecutionRowHandle row, DeviceKVPageHandle page, std::uint32_t count,
-                          cudaStream_t stream = nullptr);
+                          cudaStream_t stream);
 
     [[nodiscard]] Tensor row(KVExecutionRowHandle handle) const;
 
