@@ -8,7 +8,9 @@
 #include "ops/linear/fp8/fp8_a16_mma.cuh"
 #include "ops/linear/fp8/fp8_a16_sliced_k_mma.cuh"
 #include "ops/linear/fp8/fp8_a8_mma.cuh"
+#if !defined(_MSC_VER)
 #include "ops/linear/fp8/fp8_a8_tma_mma.cuh"
+#endif
 
 namespace ninfer::ops::detail {
 template <class Schedule, class Output, class Epilogue, class Rows = Fp8IdentityRows>
@@ -108,4 +110,17 @@ void launch_fp8_a8_mma(const Fp8A8Operands& p, Output output, Epilogue epilogue,
             launch.template operator()<false>();
     });
 }
+#if defined(_MSC_VER)
+// NINFER_MSVC_FP8_TMA_FALLBACK
+// MSVC cannot compile an over-aligned CUtensorMap wrapper passed by value as a
+// __grid_constant__ kernel parameter (C2719). Preserve the public TMA launch
+// contract but use the equivalent non-TMA A8 MMA schedule on Windows.
+template <class Schedule, class Output, class Epilogue, class Rows = Fp8IdentityRows>
+void launch_fp8_a8_tma_mma(const Fp8A8Operands& p, Output output, Epilogue epilogue,
+                           cudaStream_t stream, float* partials = nullptr, Rows rows = {}) {
+    (void)partials;
+    using FallbackSchedule = typename Schedule::Base;
+    launch_fp8_a8_mma<FallbackSchedule>(p, output, epilogue, stream, rows);
+}
+#endif
 } // namespace ninfer::ops::detail
