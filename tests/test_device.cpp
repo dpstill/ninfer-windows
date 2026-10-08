@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
         return fail("invalid sync setting did not fail before CUDA initialization");
     }
     const unsigned int expected_flags =
-        argc == 2 ? static_cast<unsigned int>(std::stoul(argv[1])) : cudaDeviceScheduleSpin;
+        argc == 2 ? static_cast<unsigned int>(std::stoul(argv[1])) : cudaDeviceScheduleBlockingSync;
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err)) {

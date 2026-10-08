@@ -24,7 +24,7 @@ constexpr SyncSchedule kSyncSchedules[] = {
 
 unsigned int sync_schedule_from_environment() {
     const char* value = std::getenv("NINFER_CUDA_SYNC");
-    if (value == nullptr) { return cudaDeviceScheduleSpin; }
+    if (value == nullptr) { return cudaDeviceScheduleBlockingSync; }
     for (const auto& schedule : kSyncSchedules) {
         if (schedule.name == value) { return schedule.flags; }
     }
