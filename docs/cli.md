@@ -13,7 +13,7 @@ The examples use Qwen3.8-27B NVFP4 with FP8 KV storage.
   --max-context 32768 \
   --max-new 8192 \
   --kv-dtype fp8 \
-  --spec mtp --draft-tokens 3 \
+  --spec mtp --draft-tokens 7 \
   --lm-head-draft
 ```
 
@@ -77,7 +77,7 @@ output capacity for the inserted suffix and the answer:
   --max-new 1024 \
   --thinking-budget 512 \
   --kv-dtype fp8 \
-  --spec mtp --draft-tokens 3 \
+  --spec mtp --draft-tokens 7 \
   --lm-head-draft
 ```
 
@@ -137,7 +137,7 @@ Run message files from the repository root when they contain repository-relative
   --max-new 128 \
   --kv-dtype fp8 \
   --vision \
-  --spec mtp --draft-tokens 3 \
+  --spec mtp --draft-tokens 7 \
   --lm-head-draft
 ```
 
@@ -162,8 +162,8 @@ long-decode, and long-context inputs.
 
 ## Speculative decoding
 
-Speculative decoding is disabled by default. Select MTP with one to five draft positions, or the
-35B-A3B DFlash or Qwen3.8-27B DFlash2 backend with one to fifteen. Both masked-draft backends
+Speculative decoding is disabled by default. Select MTP with a fixed seven-draft-token window, or
+the 35B-A3B DFlash or Qwen3.8-27B DFlash2 backend with one to fifteen. Both masked-draft backends
 may be combined with `--vision`.
 `--lm-head-draft` selects the optimized proposal head and requires a selected backend:
 
@@ -173,7 +173,7 @@ may be combined with `--vision`.
   --max-context 16384 \
   --max-new 512 \
   --kv-dtype fp8 \
-  --spec mtp --draft-tokens 3 \
+  --spec mtp --draft-tokens 7 \
   --lm-head-draft
 ```
 
@@ -202,7 +202,7 @@ block length eight, while fifteen uses the maximum supported block length sixtee
 
 ## Common options
 
-The table lists executable defaults. The examples above select FP8 KV and MTP3.
+The table lists executable defaults. The examples above select FP8 KV and MTP7.
 
 | Option | Meaning | Default |
 |---|---|---:|
@@ -213,7 +213,7 @@ The table lists executable defaults. The examples above select FP8 KV and MTP3.
 | `--device N` | CUDA device index | `0` |
 | `--kv-dtype bf16\|int8\|fp8\|nvfp4\|k8v4` | KV-cache storage | `bf16` |
 | `--spec mtp\|dflash\|dflash2` | speculative backend | off |
-| `--draft-tokens N` | MTP `1..5`; DFlash/DFlash2 `1..15` | unset |
+| `--draft-tokens N` | MTP `7`; DFlash/DFlash2 `1..15` | unset |
 | `--lm-head-draft` | optimized proposal head | off |
 | `--vision` | enable image/video input and load Vision GPU allocations | off |
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
@@ -254,10 +254,11 @@ Run `./build/apps/ninfer --help` for the exact option contract.
 ## CUDA synchronization
 
 `NINFER_CUDA_SYNC` selects the CUDA device synchronization schedule at startup for both the CLI
-and HTTP server. When unset, it defaults to `spin`, prioritizing low synchronization latency at
-the cost of CPU usage while waiting for the GPU. Use `blocking` to let the waiting thread sleep;
-the decode performance cost depends on the host. `yield` yields the CPU while waiting, and `auto`
-uses CUDA's scheduling heuristic, not an automatic performance benchmark.
+and HTTP server. When unset, it defaults to `blocking`, the laptop-oriented default: the waiting
+thread sleeps during CUDA synchronization, reducing active CPU waiting; the decode performance
+cost depends on the host. Use `spin` to prioritize minimum wake-up latency at the cost of CPU
+usage while waiting for the GPU, or `yield` to yield the CPU while waiting. `auto` uses CUDA's
+scheduling heuristic, not an automatic performance benchmark.
 
 ```bash
 NINFER_CUDA_SYNC=blocking ./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer --prompt "Hello"

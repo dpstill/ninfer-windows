@@ -274,7 +274,7 @@ docker run --rm \
   --device-state-slots 2 \
   --host-state-slots 8 \
   --host-kv-mib 8192 \
-  --spec mtp --draft-tokens 3 \
+  --spec mtp --draft-tokens 7 \
   --lm-head-draft \
   --preserve-thinking
 ```
@@ -343,7 +343,7 @@ GPU residency is fixed at process startup. `--spec` selects speculative decoding
   --prompt "Explain prefill and decode in three sentences." \
   --max-context 16384 \
   --max-new 256 \
-  --spec mtp --draft-tokens 3 \
+  --spec mtp --draft-tokens 7 \
   --lm-head-draft
 ```
 
@@ -373,7 +373,7 @@ command diagnostics. Use `--messages FILE` and `--vision` for structured image/v
   --max-context 16384 \
   --kv-capacity auto \
   --max-concurrency 2 \
-  --spec mtp --draft-tokens 3 \
+  --spec mtp --draft-tokens 7 \
   --lm-head-draft
 ```
 
@@ -403,7 +403,7 @@ The official artifacts provide the following capabilities, with optional compone
 - text generation with thinking and non-thinking prompt modes;
 - image, multi-image, video, and mixed multimodal messages;
 - chunked prefill, exact-batch CUDA Graph decode, and startup-bounded batched decode;
-- MTP speculative decoding with draft windows from one to five;
+- MTP speculative decoding with a fixed seven-draft-token window;
 - BF16, INT8, FP8, NVFP4, and K8V4 KV storage;
 - offline causal-perplexity scoring;
 - private and shared exact-prefix reuse with Device/Host State and KV retention;

@@ -77,7 +77,7 @@ enum class SpeculativeBackend : std::uint8_t {
 
 struct SpeculativeOptions {
     SpeculativeBackend backend = SpeculativeBackend::None;
-    // Startup-fixed K: MTP 1..5; DFlash and DFlash2 1..15 (query width K+1).
+    // Startup-fixed K: MTP 7; DFlash and DFlash2 1..15 (query width K+1).
     std::uint32_t draft_tokens = 0;
     ProposalHead proposal_head = ProposalHead::Full;
 };
@@ -160,6 +160,10 @@ struct EngineOptions {
     std::uint32_t pending_timeout_ms   = 30000;
     std::uint32_t prefill_chunk        = 1024;
     KvCacheStorage kv_cache            = KvCacheStorage::BFloat16;
+    // Selects the NVFP4 GDN in_proj (q/k/v/z) variant for one layer of a dual-variant artifact.
+    // Unset binds every GDN layer's default in_proj variant; a set layer must be a GDN layer whose
+    // artifact provides the <role>_nvfp4 bindings.
+    std::optional<std::uint32_t> gdn_nvfp4_layer;
     SpeculativeOptions speculative;
     std::size_t media_cache_bytes = kDefaultMediaCacheBytes;
     std::size_t media_live_bytes  = kDefaultMediaLiveBytes;
@@ -807,6 +811,15 @@ struct GenerationResult {
     GenerationEngineTiming engine_timing;
     SpeculativeStats speculative;
     ThinkingBudgetStats thinking;
+};
+
+// Full-vocabulary causal distributions for one CausalScoring window. `logprobs` is row-major
+// [positions][vocab_size]; row p is the log-softmax over the whole vocabulary of the logits that
+// predict the (first_target + p)-th input token. positions = token_count - first_target.
+struct DistributionScore {
+    std::uint32_t positions  = 0;
+    std::uint32_t vocab_size = 0;
+    std::vector<float> logprobs;
 };
 
 struct ArenaMemorySummary {

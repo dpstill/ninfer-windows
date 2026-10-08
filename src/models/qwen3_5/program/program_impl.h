@@ -464,6 +464,8 @@ public:
                                                const runtime::ResolvedExecutionOptions& options);
     [[nodiscard]] std::vector<float> causal_score(PreparedPromptData&& prompt,
                                                   std::uint32_t first_target);
+    [[nodiscard]] DistributionScore causal_score_distributions(PreparedPromptData&& prompt,
+                                                               std::uint32_t first_target);
     [[nodiscard]] std::optional<AdmissionCandidate> inspect_admission(
         const PreparedPromptData& prompt, const RequestBasePlan& base, runtime::LaneId destination,
         const ContinuationHandle* source, const SharedPrefixHandle* shared_source,
@@ -632,6 +634,15 @@ public:
     std::size_t vision_handoff_peak_bytes    = 0;
 
 private:
+    enum class CausalScoreOutput : std::uint8_t {
+        TargetLogprobs,
+        Distributions,
+    };
+
+    [[nodiscard]] std::variant<std::vector<float>, DistributionScore>
+    causal_score_run(PreparedPromptData&& prompt, std::uint32_t first_target,
+                     CausalScoreOutput output);
+
     void advance_resource_revision() noexcept {
         if (++resource_revision_.value == 0) { ++resource_revision_.value; }
     }

@@ -12,7 +12,7 @@
 
 namespace ninfer::models::qwen3_5 {
 
-inline constexpr std::uint32_t kMtpDecodeMaximumDrafts    = 5;
+inline constexpr std::uint32_t kMtpDecodeMaximumDrafts    = 7;
 inline constexpr std::uint32_t kMtpDecodeMaximumWidth     = kMtpDecodeMaximumDrafts + 1;
 inline constexpr std::uint32_t kDFlashDecodeMaximumDrafts = 15;
 inline constexpr std::uint32_t kDFlashDecodeMaximumWidth  = kDFlashDecodeMaximumDrafts + 1;
@@ -64,7 +64,7 @@ struct MtpDecodeEgress {
     std::array<TokenId, kMaximumConcurrency * kMtpDecodeMaximumWidth> licensed_tokens{};
     std::array<std::int32_t, kMaximumConcurrency> licensed_counts{};
     std::array<std::int32_t, kMaximumConcurrency> accepted_drafts{};
-    // Step-major: all B rows for proposal step 0, followed by all B rows for step 1, etc.
+    // Step-major: all B rows for proposal step 0, followed by all B rows for proposal step 1, etc.
     std::array<TokenId, kMaximumConcurrency * kMtpDecodeMaximumDrafts> next_drafts{};
     std::array<std::int32_t, kMaximumConcurrency> next_extents{};
 };

@@ -458,6 +458,8 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
                static_cast<std::int32_t>(kCausalScoreTile));
         matrix(causal_score, DType::I32, 1, static_cast<std::int32_t>(kCausalScoreTile));
         matrix(causal_score, DType::FP32, 1, static_cast<std::int32_t>(kCausalScoreTile));
+        matrix(causal_score, DType::FP32, dimension(config.vocab_size),
+               static_cast<std::int32_t>(kCausalScoreTile));
         linear_scratch(causal_score, parameters.text.output_head, 1, kCausalScoreTile);
         out.causal_score = finish(causal_score);
     }
@@ -788,7 +790,7 @@ void validate_target_options(const execution::Parameters& parameters, DeviceCont
     case SpeculativeBackend::Mtp:
         if (options.speculative.draft_tokens == 0 ||
             options.speculative.draft_tokens > kMaximumMtpDraftTokens) {
-            throw std::invalid_argument("MTP draft window must be in [1,5]");
+            throw std::invalid_argument("MTP draft window must be in [1,7]");
         }
         break;
     case SpeculativeBackend::DFlash:
