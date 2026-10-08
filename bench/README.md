@@ -88,7 +88,7 @@ Example:
   -p 512,2048 -n 128 -pg '2048,128' -r 5 --warmup 1
 ```
 
-Select a backend with `--spec mtp|dflash|dflash2 --draft-tokens K` (MTP K=1..5, DFlash/DFlash2
+Select a backend with `--spec mtp|dflash|dflash2 --draft-tokens K` (MTP K=7, DFlash/DFlash2
 K=1..15); `--lm-head-draft` selects the optimized proposal head. CUDA Graph decode is
 enabled by default.
 
@@ -999,13 +999,19 @@ cmake --build build --parallel --target ninfer_mtp_pack_bench
 ## Model MTP round benchmark
 
 `ninfer_qwen3_5_mtp_round_bench` measures the native MTP proposal and verification round. It
-constructs the same v3 ModelInstance used by Engine, prepares a fixed token seed, and drives the
-production Program's decode/commit schedule. It reports round latency and licensed-token counts:
+constructs the same v3 ModelInstance used by Engine, prepares a fixed token seed of configurable
+length, and drives the production Program's decode/commit schedule. A single sequence is
+prefilled once outside the timed region; warmup and measured rounds then run consecutively on
+it with a 2*(K+1) per-round budget, keeping the MTP window at the full configured K.
+Supports NVFP4 KV cache and draft tokens up to 7. Reports mean, median, p95, min, max round
+latency and licensed-token counts:
 
 ```bash
 cmake --build build --parallel --target ninfer_qwen3_5_mtp_round_bench
 ./build/bench/ninfer_qwen3_5_mtp_round_bench \
-  --artifact out/qwen3_6_27b.ninfer
+  --artifact out/qwen3_6_27b.ninfer \
+  --draft-tokens 7 --kv-dtype nvfp4 --context 2048 \
+  --warmup 20 --reps 100
 ```
 
 ## 35B complete DFlash round benchmark
@@ -1041,7 +1047,7 @@ cmake --build build --parallel --target ninfer_argmax_bench ninfer_sampling_sele
 ```
 
 The G2/G3/G4 benchmark uses physical rows 248320 and valid token domain 248077. G2 covers optional
-occurrence counts and batched sampling at `B=1,2,4,8`; G3 covers one-hot MTP windows `K=1..5`.
+occurrence counts and batched sampling at `B=1,2,4,8`; G3 covers one-hot MTP windows `K=1..7`.
 With no arguments it runs the G2/G3 greedy/stochastic matrix. G4 covers DFlash2 sparse-q acceptance
 with `K=1..15`, 16 proposal candidates, `P=0..K`, and `B=1..8`. `--drafts` defaults to the
 checkpoint recommendation of seven; the default extent is the selected K.
@@ -1143,15 +1149,15 @@ closed.
 
 Table, JSON, and CSV reports identify the architecture, model instance, artifact, Engine configuration,
 load summary, memory capacity, KV payload, workspace peak, phase throughput, and speculative
-statistics. JSON schema version 15 records the public value objects directly:
+statistics. JSON schema version 16 records the public value objects directly:
 
 - `load`: architecture, public name, actual formats, prefill signature, load/upload time,
   file/H2D/staging bytes and Device/Host object counts;
 - `memory`: weights/sequence/unified-workspace arenas, the optional non-additive Vision layout,
   planned context, KV storage, CUDA Graph allowance, and KV payload;
 - each repetition's `timings`: prepare, Vision, prefill, decode, and total seconds;
-- each repetition's `speculative`: window, rounds, drafted/accepted tokens, fallbacks, and per-position
-acceptance.
+- each repetition's `speculative`: window, rounds, drafted/accepted tokens, fallbacks, and
+  per-position acceptance.
 
 Each test reports `workspace_peak_bytes` from the planned phase markers, including CUDA Graph
 replay, and `workspace_allocator_peak_bytes` from host-side arena allocation activity. These are
