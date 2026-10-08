@@ -8,6 +8,35 @@ It runs text, image, and video prompts through a local CLI, OpenAI-/Anthropic-co
 or the included llama.cpp webui. It builds and runs natively on Windows 11 x64. Fork changes should 
 also build/run on 64-bit Linux but nothing has been tested there.
 
+## dpstill extensions
+
+This repository is [dpstill's fork](https://github.com/dpstill/ninfer-windows) of [natpate/ninfer-windows](https://github.com/natpate/ninfer-windows), the Windows port of [Neroued/ninfer](https://github.com/Neroued/ninfer).
+
+The original engine and Windows port remain credited to their respective authors. This branch adds model conversion, GDN mixed-precision support, runtime adjustments, and benchmarking tools.
+
+### Qwen3.8-27B GDNMix NVFP4
+
+**[Download the model on Hugging Face](https://huggingface.co/dpstill/Qwen3.8-27B-GDNMix-NVFP4-NInfer)**
+
+Designed for single-GPU inference on NVIDIA Blackwell GPUs with **24 GB VRAM**. Tested on RTX 5090 Laptop with a configured maximum context of 139,264 tokens, NVFP4 KV cache, and MTP speculative decoding.
+
+The model is derived from [neroued/Qwen3.8-27B-nvfp4-NInfer](https://huggingface.co/neroued/Qwen3.8-27B-nvfp4-NInfer). Pre-quantized GDN Q/K/V/Z projections from [minima-ai](https://huggingface.co/minima-ai/mnma_qwen3.8_27b_nvfp4) replace the corresponding projections in **37 of 48 GDN layers**. The remaining 11 retain FP8.
+
+The selection is informed by a per-layer sensitivity study. The model repository includes the [experimental results](https://huggingface.co/dpstill/Qwen3.8-27B-GDNMix-NVFP4-NInfer/blob/main/gdn-sensitivity-256.json) and [SHA-256 checksum](https://huggingface.co/dpstill/Qwen3.8-27B-GDNMix-NVFP4-NInfer/blob/main/SHA256SUMS).
+
+### Changes maintained by dpstill
+
+- Windows converter portability, tokenizer metadata, and provenance fixes.
+- Blocking CUDA synchronization as the default runtime policy.
+- MSVC `CUtensorMap` C2719 compatibility fix.
+- Mixed FP8/NVFP4 GDN conversion, sensitivity tests, and kernel adjustments.
+- Static MTP7 decoding refinements for the tested workload.
+- Fixed-context MTP round benchmarking.
+
+These are workload-specific engineering changes, not claims of universal performance improvements.
+
+**Important:** Performance and evaluation results in the inherited documentation below refer to their original model profiles, not to GDNMix.
+
 NInfer deliberately supports a closed set of model artifacts instead of acting as a general model
 runtime:
 
