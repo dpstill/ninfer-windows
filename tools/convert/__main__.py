@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import ExitStack
+import hashlib
 import importlib.util
 from pathlib import Path
 import sys
@@ -15,6 +16,50 @@ from .proposal import DEFAULT_RANKING, add_official_proposal
 from .qwen3_5 import build_model
 from .recipe import Recipe
 from .sources.safetensors import SafetensorsSource
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(8 * 1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _file_fingerprint(path: Path) -> dict:
+    return {
+        "name": path.name,
+        "bytes": path.stat().st_size,
+        "sha256": _sha256_file(path),
+    }
+
+
+def _callable_parts(value: str) -> tuple[Path, str]:
+    """Parse FILE.py[:function] without treating a Windows drive colon as a separator."""
+    filename, separator, function = value.rpartition(":")
+    if separator and filename.lower().endswith(".py") and function:
+        return Path(filename), function
+    return Path(value), "configure"
+
+
+def _callable_provenance(value: str) -> tuple[str, dict | None]:
+    """Return a portable callable label and optional source-file fingerprint."""
+    if value in RECIPES:
+        return value, None
+
+    path, entry = _callable_parts(value)
+    label = path.name if entry == "configure" else f"{path.name}:{entry}"
+    return label, _file_fingerprint(path)
+
+
+def _resource_provenance(resources: dict[str, bytes]) -> dict[str, dict]:
+    return {
+        key: {
+            "bytes": len(value),
+            "sha256": hashlib.sha256(value).hexdigest(),
+        }
+        for key, value in sorted(resources.items())
+    }
 
 
 class SourceInputs(Mapping):
@@ -42,10 +87,30 @@ class SourceInputs(Mapping):
     def __len__(self):
         return len(set(self._sources) | set(self._paths))
 
-    def provenance(self):
-        return {
-            name: {"path": str(source.path)} for name, source in self._sources.items()
-        }
+    def provenance(self, *, hash_files: bool = False):
+        result = {}
+        for name, source in self._sources.items():
+            entry = {"path": source.path.name}
+
+            if hash_files:
+                files = sorted(
+                    set(source.weight_map.values()),
+                    key=lambda path: path.name,
+                )
+                entry["files"] = [_file_fingerprint(path) for path in files]
+
+                for key, filename in (
+                    ("config", "config.json"),
+                    ("index", "model.safetensors.index.json"),
+                    ("quantization", "hf_quant_config.json"),
+                ):
+                    metadata = source.root / filename
+                    if metadata.is_file():
+                        entry[key] = _file_fingerprint(metadata)
+
+            result[name] = entry
+
+        return result
 
 
 def _pairs(values, label):
@@ -61,10 +126,8 @@ def _pairs(values, label):
 def _function(value: str):
     if value in RECIPES:
         return RECIPES[value]
-    filename, separator, function = value.rpartition(":")
-    if not separator:
-        filename, function = value, "configure"
-    path = Path(filename).resolve()
+    path, function = _callable_parts(value)
+    path = path.resolve()
     spec = importlib.util.spec_from_file_location("ninfer_user_recipe", path)
     if spec is None or spec.loader is None:
         raise ValueError(f"cannot load recipe file {path}")
@@ -127,6 +190,11 @@ def main(argv=None):
     parser.add_argument("--name", help="public instance name saved in metadata")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--hash-provenance",
+        action="store_true",
+        help="record SHA-256 hashes for conversion inputs",
+    )
     parser.add_argument("--rows-per-chunk", type=int, default=512)
     parser.add_argument("--max-file-bytes", type=int, default=32_000_000_000)
     args = parser.parse_args(argv)
@@ -165,15 +233,30 @@ def main(argv=None):
                 flush=True,
             )
 
+        recipe_label, recipe_file = _callable_provenance(args.recipe)
+
         provenance = {
             "converter": "ninfer-v3",
-            "recipe": args.recipe,
-            "sources": sources.provenance(),
+            "recipe": recipe_label,
+            "sources": sources.provenance(hash_files=args.hash_provenance),
+            "resources": _resource_provenance(model.resources),
         }
+
+        if recipe_file is not None:
+            provenance["recipe_file"] = recipe_file
+
         if args.override:
-            provenance["override"] = args.override
+            override_label, override_file = _callable_provenance(args.override)
+            provenance["override"] = override_label
+            if override_file is not None:
+                provenance["override_file"] = override_file
+
         if args.proposal:
-            provenance["ranking"] = str(args.ranking)
+            provenance["ranking"] = (
+                _file_fingerprint(args.ranking)
+                if args.hash_provenance
+                else {"name": args.ranking.name}
+            )
         report = convert(
             model,
             recipe,

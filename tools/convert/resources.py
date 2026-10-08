@@ -62,6 +62,81 @@ def token_domain(
     return len(ids), tuple(sorted(index for index, flag in special.items() if flag))
 
 
+
+_ADDED_TOKEN_FIELDS = (
+    "content",
+    "single_word",
+    "lstrip",
+    "rstrip",
+    "normalized",
+    "special",
+)
+
+
+def _normalize_tokenizer_config(tokenizer: dict, config: dict) -> dict:
+    """Normalize Hugging Face tokenizer metadata for the Qwen3.5 frontend."""
+    normalized = config
+
+    def set_value(key: str, value) -> None:
+        nonlocal normalized
+        if normalized is config:
+            normalized = dict(config)
+        normalized[key] = value
+
+    # NInfer Qwen3.5 requires no implicit BOS and no prefix-space insertion.
+    # Some tokenizer exports omit these fields even though their tokenizer
+    # semantics are equivalent to false.
+    for field in ("add_bos_token", "add_prefix_space"):
+        if field not in config:
+            set_value(field, False)
+            continue
+        value = config[field]
+        if type(value) is not bool:
+            raise ValueError(f"tokenizer_config.json {field} must be boolean")
+        if value:
+            raise ValueError(
+                f"tokenizer_config.json {field} must be false for Qwen3.5"
+            )
+
+    # NInfer Qwen3.5 frontend requires the official <|endoftext|> pad token.
+    # Qwen3.8 metadata may export <|im_end|> here even though
+    # generation_config.json uses pad_token_id 248044 (<|endoftext|>).
+    if normalized.get("pad_token") != "<|endoftext|>":
+        set_value("pad_token", "<|endoftext|>")
+
+    if "added_tokens_decoder" in config:
+        if not isinstance(config["added_tokens_decoder"], dict):
+            raise ValueError(
+                "tokenizer_config.json added_tokens_decoder must be an object"
+            )
+        return normalized
+
+    if "added_tokens" not in tokenizer:
+        return normalized
+
+    added = tokenizer["added_tokens"]
+    if not isinstance(added, list):
+        raise ValueError("tokenizer.json added_tokens must be an array")
+
+    decoder = {}
+    for token in added:
+        if not isinstance(token, dict):
+            raise ValueError("tokenizer.json added token must be an object")
+        if type(token.get("id")) is not int:
+            raise ValueError("tokenizer.json added token id must be an integer")
+        entry = {}
+        for field in _ADDED_TOKEN_FIELDS:
+            if field not in token:
+                raise ValueError(
+                    f"tokenizer.json added token is missing {field}"
+                )
+            entry[field] = token[field]
+        decoder[str(token["id"])] = entry
+
+    set_value("added_tokens_decoder", decoder)
+    return normalized
+
+
 def load_resources(
     model_dir: Path,
     *,
@@ -110,7 +185,19 @@ def load_resources(
             object_id = f"resource/{component}/{role}"
             references[component][role] = object_id
             payloads[object_id] = data
+    tokenizer = parsed["tokenizer.json"]
+    tokenizer_config = _normalize_tokenizer_config(
+        tokenizer, parsed["tokenizer_config.json"]
+    )
+
+    if tokenizer_config is not parsed["tokenizer_config.json"]:
+        parsed["tokenizer_config.json"] = tokenizer_config
+        object_id = references["text"]["tokenizer_config.json"]
+        payloads[object_id] = (
+            json.dumps(tokenizer_config, ensure_ascii=False, indent=2) + "\n"
+        ).encode("utf-8")
+
     count, special = token_domain(
-        parsed["tokenizer.json"], parsed["tokenizer_config.json"], vocab_size
+        tokenizer, tokenizer_config, vocab_size
     )
     return references, payloads, count, special

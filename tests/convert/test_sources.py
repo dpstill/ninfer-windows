@@ -88,3 +88,40 @@ def test_source_reads_every_byte_value(tmp_path):
     with SafetensorsSource(tmp_path) as store:
         assert torch.equal(store.read_flat("proj.weight_packed"), words)
         assert torch.equal(store.read_flat("proj.weight_packed", 26, 300), words[26:300])
+
+
+def test_source_provenance_hides_absolute_paths(tmp_path):
+    import json
+    from contextlib import ExitStack
+    from pathlib import Path
+
+    from tools.convert.__main__ import SourceInputs
+
+    save_file(
+        {"test.weight": torch.arange(16, dtype=torch.uint8)},
+        str(tmp_path / "model.safetensors"),
+    )
+    (tmp_path / "config.json").write_text(
+        '{"model_type":"test"}\n',
+        encoding="utf-8",
+    )
+
+    with ExitStack() as stack:
+        base = stack.enter_context(SafetensorsSource(tmp_path))
+        sources = SourceInputs(base, {}, stack)
+        provenance = sources.provenance(hash_files=True)
+
+    entry = provenance["base"]
+
+    assert entry["path"] == tmp_path.name
+    assert not Path(entry["path"]).is_absolute()
+
+    assert entry["files"][0]["name"] == "model.safetensors"
+    assert entry["files"][0]["bytes"] > 0
+    assert len(entry["files"][0]["sha256"]) == 64
+
+    assert entry["config"]["name"] == "config.json"
+    assert entry["config"]["bytes"] > 0
+    assert len(entry["config"]["sha256"]) == 64
+
+    assert str(tmp_path) not in json.dumps(provenance)

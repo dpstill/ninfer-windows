@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from tools.convert.model import Model, Parameter
-from tools.convert.proposal import add_proposal
+from tools.convert.proposal import add_official_proposal, add_proposal
 from tools.convert.recipe import Recipe
 from tools.convert.resources import token_domain
 from tools.convert.sources.logical import array_source
@@ -39,3 +39,44 @@ def test_proposal_rows_ids_and_uses_follow_final_token_domain(tmp_path):
     assert torch.equal(selected, head[[0, 2, 5]])
     assert model.parameters["proposal/head"].inputs == ("mtp/final_hidden",)
     assert model.components["text"]["proposal"] == {"domain": "indexed", "rows": 3}
+
+def test_official_proposal_uses_configured_output_head_source(tmp_path):
+    base_head = torch.zeros((8, 4), dtype=torch.bfloat16)
+    configured_head = (
+        torch.arange(8 * 4).reshape(8, 4).to(torch.bfloat16) + 100
+    )
+
+    model = Model(
+        {"text": {"config": {"vocab_size": 8}}},
+        token_count=8,
+        special_token_ids=(),
+    )
+    model.add(
+        Parameter(
+            "text/output_head",
+            (8, 4),
+            array_source(base_head, "base-head"),
+        )
+    )
+
+    recipe = Recipe(model)
+    recipe.assign(
+        "text/output_head",
+        source=array_source(configured_head, "configured-head"),
+    )
+
+    ranking = tmp_path / "ranking.i64"
+    np.array([[8, 7, 6, 5, 4, 3, 2, 1]], dtype="<i8").tofile(ranking)
+
+    add_official_proposal(recipe, ranking=ranking, rows=3)
+
+    ids = model.parameters["proposal/token_ids"].source.values().to(torch.long)
+    selected = (
+        model.parameters["proposal/head"]
+        .source.values()
+        .reshape(3, 4)
+    )
+
+    assert torch.equal(selected, configured_head[ids])
+    assert not torch.equal(selected, base_head[ids])
+

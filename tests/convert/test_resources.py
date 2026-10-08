@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from tools.convert.resources import load_resources, token_domain
+from tools.convert.resources import (
+    _normalize_tokenizer_config,
+    load_resources,
+    token_domain,
+)
 
 
 def test_final_resources_override_defaults_without_hash_pinning(tmp_path):
@@ -47,3 +51,103 @@ def test_special_tokens_merge_both_resources_with_consistent_flags():
     config["added_tokens_decoder"]["1"] = {"content": "<start>", "special": False}
     with pytest.raises(ValueError, match="special flag"):
         token_domain(tokenizer, config, 4)
+
+
+def test_tokenizer_config_derives_added_tokens_decoder_when_missing():
+    tokenizer = {
+        "added_tokens": [
+            {
+                "id": 2,
+                "content": "<end>",
+                "single_word": False,
+                "lstrip": False,
+                "rstrip": False,
+                "normalized": False,
+                "special": True,
+            },
+            {
+                "id": 3,
+                "content": "<think>",
+                "single_word": False,
+                "lstrip": False,
+                "rstrip": False,
+                "normalized": False,
+                "special": False,
+            },
+        ]
+    }
+    config = {"eos_token": "<end>"}
+
+    normalized = _normalize_tokenizer_config(tokenizer, config)
+
+    assert normalized is not config
+    assert "added_tokens_decoder" not in config
+    assert normalized["added_tokens_decoder"] == {
+        "2": {
+            "content": "<end>",
+            "single_word": False,
+            "lstrip": False,
+            "rstrip": False,
+            "normalized": False,
+            "special": True,
+        },
+        "3": {
+            "content": "<think>",
+            "single_word": False,
+            "lstrip": False,
+            "rstrip": False,
+            "normalized": False,
+            "special": False,
+        },
+    }
+
+    # Existing valid metadata must be preserved, not regenerated.
+    assert _normalize_tokenizer_config(tokenizer, normalized) is normalized
+
+
+def test_tokenizer_config_without_added_tokens_gets_prefix_semantics():
+    tokenizer = {
+        "model": {
+            "vocab": {
+                "a": 0,
+                "b": 1,
+            }
+        }
+    }
+    config = {}
+
+    normalized = _normalize_tokenizer_config(tokenizer, config)
+
+    assert normalized is not config
+    assert config == {}
+    assert normalized["add_bos_token"] is False
+    assert normalized["add_prefix_space"] is False
+    assert "added_tokens_decoder" not in normalized
+
+
+def test_tokenizer_config_normalizes_qwen_pad_token():
+    tokenizer = {
+        "added_tokens": [
+            {
+                "id": 248044,
+                "content": "<|endoftext|>",
+                "single_word": False,
+                "lstrip": False,
+                "rstrip": False,
+                "normalized": False,
+                "special": True,
+            }
+        ]
+    }
+    config = {
+        "add_prefix_space": False,
+        "pad_token": "<|im_end|>",
+    }
+
+    normalized = _normalize_tokenizer_config(tokenizer, config)
+
+    assert config["pad_token"] == "<|im_end|>"
+    assert normalized["add_bos_token"] is False
+    assert normalized["add_prefix_space"] is False
+    assert normalized["pad_token"] == "<|endoftext|>"
+    assert normalized["added_tokens_decoder"]["248044"]["content"] == "<|endoftext|>"

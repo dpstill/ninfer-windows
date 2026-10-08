@@ -20,13 +20,22 @@ if hasattr(os, "pread"):
 else:
 
     def _pread(fd: int, length: int, offset: int) -> bytes:
-        # Windows: no pread. One dedicated fd per source file; lseek +
-        # read (with the offset restored) is equivalent.
+        # Windows: no pread. Emulate it with an explicit seek and loop because
+        # os.read() is allowed to return fewer bytes than requested.
         original = os.lseek(fd, 0, os.SEEK_CUR)
-        os.lseek(fd, offset, os.SEEK_SET)
-        data = os.read(fd, length)
-        os.lseek(fd, original, os.SEEK_SET)
-        return data
+        try:
+            os.lseek(fd, offset, os.SEEK_SET)
+            chunks = bytearray()
+            remaining = length
+            while remaining:
+                chunk = os.read(fd, remaining)
+                if not chunk:
+                    break
+                chunks.extend(chunk)
+                remaining -= len(chunk)
+            return bytes(chunks)
+        finally:
+            os.lseek(fd, original, os.SEEK_SET)
 
 _DTYPES = {
     "BF16": (torch.bfloat16, 2),
@@ -199,5 +208,5 @@ def tensor_source(
         return store.read_flat(name, offset + begin, offset + end)
 
     return LogicalSource(
-        shape, f"{store.path}:{name}[{offset}:{offset+prod(shape)}]", read
+        shape, f"{store.path.name}:{name}[{offset}:{offset+prod(shape)}]", read
     )

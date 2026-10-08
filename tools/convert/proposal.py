@@ -98,9 +98,15 @@ def add_proposal(
 def add_official_proposal(
     recipe: Recipe, *, ranking=DEFAULT_RANKING, rows=131072
 ) -> None:
+    selections = recipe.selections["text/output_head"]
+    source = (
+        selections[0].source
+        if len(selections) == 1
+        else recipe.model.parameters["text/output_head"].source
+    )
     add_proposal(
         recipe,
         ranking=ranking,
         rows=rows,
-        source=recipe.model.parameters["text/output_head"].source,
+        source=source,
     )
