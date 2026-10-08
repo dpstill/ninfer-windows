@@ -81,6 +81,12 @@ public:
     [[nodiscard]] std::vector<float> score_tokens(std::vector<TokenId> tokens,
                                                   std::uint32_t first_target);
 
+    // Returns the full-vocabulary log-softmax distribution for every position i in
+    // [first_target,tokens.size()): logprobs row p is the distribution over the whole
+    // vocabulary that predicts the (first_target + p)-th token.
+    [[nodiscard]] DistributionScore score_distributions(std::vector<TokenId> tokens,
+                                                       std::uint32_t first_target);
+
     [[nodiscard]] std::uint32_t count_tokens(PromptInput input,
                                              const PreparationControl& control = {}) const;
     [[nodiscard]] ModelSamplingDefaults sampling_defaults() const;

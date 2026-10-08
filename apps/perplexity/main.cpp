@@ -49,6 +49,9 @@ struct Options {
     int device                          = 0;
     ninfer::KvCacheStorage kv           = ninfer::KvCacheStorage::Fp8E4M3Row256;
     bool quick                          = false;
+    std::optional<std::uint32_t> gdn_nvfp4_layer;
+    std::optional<std::filesystem::path> distributions;
+    std::uint32_t distribution_positions = 8192;
     ninfer::product::LogLevel log_level = ninfer::product::LogLevel::Info;
 };
 
@@ -57,6 +60,8 @@ std::string usage_text() {
            "(--corpus <manifest.json> [--quick] | --text <utf8-file>)\n"
            "       [--context N] [--stride N] [--device N]\n"
            "       [--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--output <directory>]\n"
+           "       [--gdn-nvfp4-layer N] [--distributions <directory> "
+           "[--distribution-positions N]]\n"
            "       [--log-level trace|debug|info|warning|error|critical|off]\n";
 }
 
@@ -118,6 +123,15 @@ Options parse_options(int argc, char** argv) {
             }
         } else if (option == "--output") {
             out.output = std::filesystem::path(value("--output"));
+        } else if (option == "--gdn-nvfp4-layer") {
+            out.gdn_nvfp4_layer = parse_integer<std::uint32_t>(value("--gdn-nvfp4-layer"),
+                                                               "gdn-nvfp4-layer");
+        } else if (option == "--distributions") {
+            out.distributions = std::filesystem::path(value("--distributions"));
+        } else if (option == "--distribution-positions") {
+            out.distribution_positions =
+                parse_integer<std::uint32_t>(value("--distribution-positions"),
+                                             "distribution-positions");
         } else if (option == "--log-level") {
             out.log_level = ninfer::product::parse_log_level(value("--log-level"));
         } else {
@@ -130,6 +144,9 @@ Options parse_options(int argc, char** argv) {
     if (out.quick && !out.corpus) { usage_error("--quick requires --corpus"); }
     if (out.context < 2 || out.stride == 0 || out.stride >= out.context) {
         usage_error("context/stride must satisfy context>=2 and 1<=stride<context");
+    }
+    if (out.distribution_positions == 0) {
+        usage_error("--distribution-positions must be at least 1");
     }
     return out;
 }
@@ -219,6 +236,7 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
     engine_options.device           = options.device;
     engine_options.max_context      = options.context;
     engine_options.kv_cache         = options.kv;
+    engine_options.gdn_nvfp4_layer  = options.gdn_nvfp4_layer;
     engine_options.startup_observer = startup_log.observer();
     ninfer::Engine engine(std::move(engine_options));
     const ninfer::LoadSummary load = engine.load_summary();
@@ -268,6 +286,25 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
     json stream_reports             = json::array();
     std::uint64_t completed_windows = 0;
 
+    const bool dump_distributions = options.distributions.has_value();
+    std::filesystem::path distributions_directory;
+    std::uint64_t distribution_budget = options.distribution_positions;
+    std::uint64_t distribution_dumped = 0;
+    std::uint32_t distribution_vocab  = 0;
+    std::vector<std::ofstream> dist_bin, dist_targets, dist_positions;
+    std::vector<std::uint64_t> dist_rows;
+    if (dump_distributions) {
+        distributions_directory =
+            std::filesystem::absolute(*options.distributions).lexically_normal();
+        if (!std::filesystem::exists(distributions_directory)) {
+            std::filesystem::create_directories(distributions_directory);
+        }
+        dist_bin.resize(streams.size());
+        dist_targets.resize(streams.size());
+        dist_positions.resize(streams.size());
+        dist_rows.resize(streams.size());
+    }
+
     for (std::size_t stream_index = 0; stream_index < streams.size(); ++stream_index) {
         EvaluationStream& stream = streams[stream_index];
         std::ostringstream stream_status;
@@ -288,15 +325,74 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
             std::vector<ninfer::TokenId> input(
                 stream.tokens.begin() + static_cast<std::ptrdiff_t>(window.input_begin),
                 stream.tokens.begin() + static_cast<std::ptrdiff_t>(window.input_end));
+            const std::size_t expected = window.target_end - window.target_begin;
             const Clock::time_point window_started = Clock::now();
             std::vector<float> logprobs;
-            try {
-                logprobs = engine.score_tokens(std::move(input), window.first_target);
-            } catch (const std::exception& error) {
-                throw std::runtime_error("scoring " + stream.source.id + " window " +
-                                         std::to_string(window_index) + " failed: " + error.what());
+            if (dump_distributions && distribution_budget > 0) {
+                const std::size_t take = std::min<std::size_t>(distribution_budget, expected);
+                ninfer::DistributionScore dist;
+                try {
+                    dist = engine.score_distributions(input, window.first_target);
+                } catch (const std::exception& error) {
+                    throw std::runtime_error("scoring " + stream.source.id + " window " +
+                                             std::to_string(window_index) +
+                                             " distributions failed: " + error.what());
+                }
+                if (dist.positions != expected ||
+                    dist.logprobs.size() != static_cast<std::size_t>(dist.positions) *
+                                                dist.vocab_size) {
+                    throw std::runtime_error(
+                        "scoring returned an invalid distribution shape for " + stream.source.id);
+                }
+                logprobs.resize(expected);
+                for (std::size_t k = 0; k < expected; ++k) {
+                    const std::uint32_t target_token = stream.tokens[window.target_begin + k];
+                    logprobs[k] = dist.logprobs[k * dist.vocab_size + target_token];
+                }
+                if (take > 0 && !dist_bin[stream_index].is_open()) {
+                    const std::string stem = "s" + std::to_string(stream_index);
+                    dist_bin[stream_index].open(
+                        distributions_directory / (stem + ".dist.bin"),
+                        std::ios::binary | std::ios::app);
+                    dist_targets[stream_index].open(
+                        distributions_directory / (stem + ".targets.i32"),
+                        std::ios::binary | std::ios::app);
+                    dist_positions[stream_index].open(
+                        distributions_directory / (stem + ".positions.i64"),
+                        std::ios::binary | std::ios::app);
+                    if (dist_bin[stream_index].fail() || dist_targets[stream_index].fail() ||
+                        dist_positions[stream_index].fail()) {
+                        throw std::runtime_error(
+                            "cannot open distributions files in " + distributions_directory.string());
+                    }
+                }
+                for (std::size_t k = 0; k < take; ++k) {
+                    const std::uint32_t target_token = stream.tokens[window.target_begin + k];
+                    const std::int64_t global_position =
+                        static_cast<std::int64_t>(window.target_begin + k);
+                    dist_bin[stream_index].write(
+                        reinterpret_cast<const char*>(dist.logprobs.data() +
+                                                       k * static_cast<std::size_t>(dist.vocab_size)),
+                        static_cast<std::streamsize>(dist.vocab_size) *
+                            static_cast<std::streamsize>(sizeof(float)));
+                    dist_targets[stream_index].write(reinterpret_cast<const char*>(&target_token),
+                                                     sizeof(target_token));
+                    dist_positions[stream_index].write(
+                        reinterpret_cast<const char*>(&global_position), sizeof(global_position));
+                }
+                dist_rows[stream_index] += take;
+                distribution_budget -= take;
+                distribution_dumped += take;
+                distribution_vocab = dist.vocab_size;
+            } else {
+                try {
+                    logprobs = engine.score_tokens(std::move(input), window.first_target);
+                } catch (const std::exception& error) {
+                    throw std::runtime_error("scoring " + stream.source.id + " window " +
+                                             std::to_string(window_index) + " failed: " +
+                                             error.what());
+                }
             }
-            const std::size_t expected = window.target_end - window.target_begin;
             if (logprobs.size() != expected) {
                 throw std::runtime_error("scoring returned an invalid target count for " +
                                          stream.source.id);
@@ -355,6 +451,43 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
         stream_reports.push_back(std::move(stream_report));
     }
 
+    if (dump_distributions) {
+        json dist_streams = json::array();
+        for (std::size_t si = 0; si < streams.size(); ++si) {
+            if (dist_rows[si] == 0) { continue; }
+            const std::string stem = "s" + std::to_string(si);
+            dist_streams.push_back(json{{"index", si},
+                                        {"id", streams[si].source.id},
+                                        {"rows", dist_rows[si]},
+                                        {"bin", stem + ".dist.bin"},
+                                        {"targets", stem + ".targets.i32"},
+                                        {"positions", stem + ".positions.i64"}});
+        }
+        json dist_manifest{
+            {"vocab_size", distribution_vocab},
+            {"layout",
+             "bin is row-major [rows][vocab_size] FP32; row p predicts the token at global "
+             "position positions[p] (targets[p] is that token id)"},
+            {"position_cap", options.distribution_positions},
+            {"positions_dumped", distribution_dumped},
+            {"streams", std::move(dist_streams)}};
+        const std::filesystem::path manifest_path = distributions_directory / "manifest.json";
+        std::ofstream manifest_out(manifest_path, std::ios::binary | std::ios::trunc);
+        if (!manifest_out) {
+            throw std::runtime_error("cannot create distributions manifest: " +
+                                     manifest_path.string());
+        }
+        manifest_out << std::setw(2) << dist_manifest << '\n';
+        manifest_out.flush();
+        if (!manifest_out) {
+            throw std::runtime_error("cannot write distributions manifest: " +
+                                     manifest_path.string());
+        }
+        logger->info("distributions | {} positions | {}",
+                     ninfer::product::format_pretty_count(distribution_dumped),
+                     distributions_directory.string());
+    }
+
     const double scoring_seconds = seconds_since(scoring_started);
     progress->clear();
     logger->info("scoring complete | {} tokens | {} windows | PPL {:.6g} | {} | {}",
@@ -385,13 +518,20 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
           {"source", corpus.source.string()},
           {"stream_count", streams.size()}}},
         {"execution",
-         {{"purpose", "causal_scoring"},
-          {"device", options.device},
-          {"context_tokens", options.context},
-          {"stride_tokens", options.stride},
-          {"prefill_chunk_tokens", 1024},
-          {"score_tile_tokens", 1024},
-          {"kv_dtype", kv_name(options.kv)}}},
+          {{"purpose", "causal_scoring"},
+           {"device", options.device},
+           {"context_tokens", options.context},
+           {"stride_tokens", options.stride},
+           {"prefill_chunk_tokens", 1024},
+           {"score_tile_tokens", 1024},
+           {"kv_dtype", kv_name(options.kv)},
+           {"gdn_nvfp4_layer",
+            options.gdn_nvfp4_layer.has_value() ? json(*options.gdn_nvfp4_layer) : json()},
+           {"distributions",
+            options.distributions.has_value()
+                ? json(
+                      std::filesystem::absolute(*options.distributions).lexically_normal().string())
+                : json()}}},
         {"timing",
          {{"load_seconds", load.load_seconds},
           {"read_and_tokenize_seconds", preflight_seconds},

@@ -4,6 +4,7 @@
 #include "models/qwen3_5/execution/linear.h"
 #include "core/startup.h"
 #include "core/device.h"
+#include "ninfer/ops/log_softmax.h"
 #include "ninfer/ops/target_logprobs.h"
 
 #include <algorithm>
@@ -318,6 +319,21 @@ ProgramImpl::~ProgramImpl() noexcept {
 
 std::vector<float> ProgramImpl::causal_score(PreparedPromptData&& prompt,
                                              std::uint32_t first_target) {
+    auto result =
+        causal_score_run(std::move(prompt), first_target, CausalScoreOutput::TargetLogprobs);
+    return std::move(std::get<std::vector<float>>(result));
+}
+
+DistributionScore ProgramImpl::causal_score_distributions(PreparedPromptData&& prompt,
+                                                          std::uint32_t first_target) {
+    auto result =
+        causal_score_run(std::move(prompt), first_target, CausalScoreOutput::Distributions);
+    return std::move(std::get<DistributionScore>(result));
+}
+
+std::variant<std::vector<float>, DistributionScore>
+ProgramImpl::causal_score_run(PreparedPromptData&& prompt, std::uint32_t first_target,
+                              CausalScoreOutput output) {
     if (!causal_scoring || !score_hidden || !score_logprobs_host ||
         workspace_plan.causal_score == 0) {
         throw std::logic_error("Program was not constructed for causal scoring");
@@ -359,8 +375,19 @@ std::vector<float> ProgramImpl::causal_score(PreparedPromptData&& prompt,
         if (!released) { throw std::logic_error("causal score resources could not be released"); }
     };
 
-    std::vector<float> output;
-    output.reserve(token_count_size - first_target);
+    const std::uint32_t public_token_count =
+        dimension(parameters.model.resources().public_token_count);
+    const std::uint32_t scored_positions = token_count - first_target;
+
+    std::vector<float> target_logprobs;
+    if (output == CausalScoreOutput::TargetLogprobs) {
+        target_logprobs.reserve(scored_positions);
+    }
+    std::vector<float> distributions;
+    std::uint32_t distribution_rows = 0;
+    if (output == CausalScoreOutput::Distributions) {
+        distributions.resize(static_cast<std::size_t>(scored_positions) * public_token_count);
+    }
     std::vector<TokenId> staged_targets;
     staged_targets.reserve(kCausalScoreTile);
     std::uint32_t staged_columns = 0;
@@ -386,20 +413,39 @@ std::vector<float> ProgramImpl::causal_score(PreparedPromptData&& prompt,
             const auto columns = static_cast<std::int32_t>(staged_columns);
             Tensor logits      = work.alloc(
                 DType::BF16, {dimension(parameters.model.config().text.vocab_size), columns});
-            Tensor target_ids = work.alloc(DType::I32, {columns});
-            Tensor logprobs   = work.alloc(DType::FP32, {columns});
             Tensor hidden     = score_hidden->slice(1, 0, columns);
             execution::project(hidden, parameters.text.output_head, logits, work, device.stream);
-            CUDA_CHECK(cudaMemcpyAsync(target_ids.data, staged_targets.data(), target_ids.bytes(),
-                                                    cudaMemcpyHostToDevice, device.stream));
-            ops::target_logprobs(logits, target_ids,
-                                              dimension(parameters.model.resources().public_token_count),
-                                              logprobs, device.stream);
-            CUDA_CHECK(cudaMemcpyAsync(score_logprobs_host->data(), logprobs.data, logprobs.bytes(),
-                                                    cudaMemcpyDeviceToHost, device.stream));
-            device.synchronize();
-            const auto* host = static_cast<const float*>(score_logprobs_host->data());
-            output.insert(output.end(), host, host + staged_columns);
+            if (output == CausalScoreOutput::TargetLogprobs) {
+                Tensor target_ids = work.alloc(DType::I32, {columns});
+                Tensor logprobs   = work.alloc(DType::FP32, {columns});
+                CUDA_CHECK(cudaMemcpyAsync(target_ids.data, staged_targets.data(),
+                                            target_ids.bytes(), cudaMemcpyHostToDevice,
+                                            device.stream));
+                ops::target_logprobs(logits, target_ids, public_token_count, logprobs,
+                                     device.stream);
+                CUDA_CHECK(cudaMemcpyAsync(score_logprobs_host->data(), logprobs.data,
+                                           logprobs.bytes(), cudaMemcpyDeviceToHost,
+                                           device.stream));
+                device.synchronize();
+                const auto* host = static_cast<const float*>(score_logprobs_host->data());
+                target_logprobs.insert(target_logprobs.end(), host, host + staged_columns);
+            } else {
+                Tensor distribution_logits = work.alloc(
+                    DType::FP32, {static_cast<std::int32_t>(public_token_count), columns});
+                ops::log_softmax(logits, public_token_count, distribution_logits,
+                                 device.stream);
+                // The stream is non-blocking, so the pageable copy below must wait for the
+                // kernel through the stream, not the legacy default stream.
+                device.synchronize();
+                float* destination =
+                    distributions.data() +
+                    static_cast<std::size_t>(distribution_rows) * public_token_count;
+                CUDA_CHECK(cudaMemcpy(destination, distribution_logits.data,
+                                      static_cast<std::size_t>(columns) * public_token_count *
+                                          sizeof(float),
+                                      cudaMemcpyDeviceToHost));
+                distribution_rows += staged_columns;
+            }
             staged_targets.clear();
             staged_columns = 0;
             work.reset();
@@ -457,11 +503,19 @@ std::vector<float> ProgramImpl::causal_score(PreparedPromptData&& prompt,
             }
         }
         flush();
-        if (output.size() != token_count_size - first_target) {
-            throw std::logic_error("causal score produced the wrong number of logprobs");
+        if (output == CausalScoreOutput::TargetLogprobs) {
+            if (target_logprobs.size() != scored_positions) {
+                throw std::logic_error("causal score produced the wrong number of logprobs");
+            }
+            cleanup();
+            return std::move(target_logprobs);
+        }
+        if (distribution_rows != scored_positions) {
+            throw std::logic_error("causal score produced the wrong number of distribution rows");
         }
         cleanup();
-        return output;
+        return DistributionScore{scored_positions, public_token_count,
+                                 std::move(distributions)};
     } catch (...) {
         try {
             device.synchronize();

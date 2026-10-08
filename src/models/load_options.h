@@ -11,6 +11,8 @@ struct LoadOptions {
     bool vision                    = false;
     SpeculativeBackend speculative = SpeculativeBackend::None;
     ProposalHead proposal_head     = ProposalHead::Full;
+    // Selects the NVFP4 GDN in_proj variant for one layer of a dual-variant artifact.
+    std::optional<std::uint32_t> gdn_nvfp4_layer;
 
     bool operator==(const LoadOptions&) const = default;
 
@@ -53,10 +55,11 @@ struct LoadOptions {
 }
 
 [[nodiscard]] inline LoadOptions load_options(const EngineOptions& options) noexcept {
-    return {.purpose       = options.purpose,
-            .vision        = options.enable_vision,
-            .speculative   = options.speculative.backend,
-            .proposal_head = options.speculative.proposal_head};
+    return {.purpose         = options.purpose,
+            .vision          = options.enable_vision,
+            .speculative    = options.speculative.backend,
+            .proposal_head  = options.speculative.proposal_head,
+            .gdn_nvfp4_layer = options.gdn_nvfp4_layer};
 }
 
 } // namespace ninfer::models

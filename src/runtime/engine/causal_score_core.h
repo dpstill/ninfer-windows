@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace ninfer::runtime {
@@ -60,22 +61,14 @@ public:
     CausalScoreCore& operator=(const CausalScoreCore&) = delete;
 
     [[nodiscard]] std::vector<float> score(PreparedPrompt prompt, std::uint32_t first_target) {
-        // One synchronous public call owns the sole job slot until its result is delivered.
-        std::scoped_lock call_lock(call_mutex_);
-        auto job                               = std::make_unique<Job>();
-        job->prompt                            = std::move(prompt);
-        job->first_target                      = first_target;
-        std::future<std::vector<float>> result = job->promise.get_future();
-        {
-            std::lock_guard queue_lock(queue_mutex_);
-            if (stopping_) { throw std::runtime_error("causal scoring engine is stopping"); }
-            if (job_ != nullptr) {
-                throw std::logic_error("causal scoring core already has an in-flight job");
-            }
-            job_ = std::move(job);
-        }
-        queue_cv_.notify_one();
-        return result.get();
+        auto result = run(std::move(prompt), first_target, Kind::TargetLogprobs);
+        return std::move(std::get<std::vector<float>>(result));
+    }
+
+    [[nodiscard]] DistributionScore score_distributions(PreparedPrompt prompt,
+                                                       std::uint32_t first_target) {
+        auto result = run(std::move(prompt), first_target, Kind::Distributions);
+        return std::move(std::get<DistributionScore>(result));
     }
 
     [[nodiscard]] MemorySummary memory_summary() const {
@@ -110,11 +103,36 @@ public:
     }
 
 private:
+    enum class Kind { TargetLogprobs, Distributions };
+
     struct Job {
+        Kind kind = Kind::TargetLogprobs;
         PreparedPrompt prompt;
         std::uint32_t first_target = 0;
-        std::promise<std::vector<float>> promise;
+        std::promise<std::variant<std::vector<float>, DistributionScore>> promise;
     };
+
+    // One synchronous public call owns the sole job slot until its result is delivered.
+    std::variant<std::vector<float>, DistributionScore>
+    run(PreparedPrompt prompt, std::uint32_t first_target, Kind kind) {
+        std::scoped_lock call_lock(call_mutex_);
+        auto job                               = std::make_unique<Job>();
+        job->kind                              = kind;
+        job->prompt                             = std::move(prompt);
+        job->first_target                       = first_target;
+        std::future<std::variant<std::vector<float>, DistributionScore>> result =
+            job->promise.get_future();
+        {
+            std::lock_guard queue_lock(queue_mutex_);
+            if (stopping_) { throw std::runtime_error("causal scoring engine is stopping"); }
+            if (job_ != nullptr) {
+                throw std::logic_error("causal scoring core already has an in-flight job");
+            }
+            job_ = std::move(job);
+        }
+        queue_cv_.notify_one();
+        return result.get();
+    }
 
     void worker_loop() noexcept {
         for (;;) {
@@ -129,11 +147,16 @@ private:
                 job = std::move(job_);
             }
             try {
-                std::vector<float> result;
+                std::variant<std::vector<float>, DistributionScore> result;
                 {
                     std::scoped_lock lock(execution_mutex_);
-                    result =
-                        instance_.program->causal_score(std::move(job->prompt), job->first_target);
+                    if (job->kind == Kind::TargetLogprobs) {
+                        result = instance_.program->causal_score(
+                            std::move(job->prompt), job->first_target);
+                    } else {
+                        result = instance_.program->causal_score_distributions(
+                            std::move(job->prompt), job->first_target);
+                    }
                 }
                 job->promise.set_value(std::move(result));
             } catch (...) {

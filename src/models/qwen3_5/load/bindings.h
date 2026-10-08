@@ -47,7 +47,8 @@ private:
                                       std::uint64_t intermediate, const std::string& prefix,
                                       bool draft = false);
 [[nodiscard]] BlockWeights bind_block(Bindings& bindings, const TextConfig& config,
-                                      const std::string& prefix, MixerKind mixer);
+                                      const std::string& prefix, MixerKind mixer,
+                                      bool gdn_nvfp4 = false);
 [[nodiscard]] TextWeights bind_text(Bindings& bindings, const TextConfig& config,
                                     const LoadOptions& options);
 [[nodiscard]] VisionWeights bind_vision(Bindings& bindings, const VisionConfig& config,

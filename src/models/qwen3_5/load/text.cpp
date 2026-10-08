@@ -32,17 +32,18 @@ DenseWeights bind_dense(Bindings& b, std::uint64_t h, std::uint64_t intermediate
 
 namespace {
 
-GdnWeights bind_gdn(Bindings& b, const TextConfig& text, const std::string& p) {
+GdnWeights bind_gdn(Bindings& b, const TextConfig& text, const std::string& p, bool nvfp4) {
     const auto& g    = text.gdn.value();
     const auto h     = text.hidden_size;
     const auto k     = g.key_width();
     const auto v     = g.value_width();
     const auto heads = g.linear_num_value_heads;
+    const std::string in_proj = nvfp4 ? "_nvfp4" : "";
     GdnWeights out;
-    out.query        = b.parameter(p + "gdn/query", {k, h}, {p + "mixer_input"});
-    out.key          = b.parameter(p + "gdn/key", {k, h}, {p + "mixer_input"});
-    out.value        = b.parameter(p + "gdn/value", {v, h}, {p + "mixer_input"});
-    out.z            = b.parameter(p + "gdn/z", {v, h}, {p + "mixer_input"});
+    out.query        = b.parameter(p + "gdn/query" + in_proj, {k, h}, {p + "mixer_input"});
+    out.key          = b.parameter(p + "gdn/key" + in_proj, {k, h}, {p + "mixer_input"});
+    out.value        = b.parameter(p + "gdn/value" + in_proj, {v, h}, {p + "mixer_input"});
+    out.z            = b.parameter(p + "gdn/z" + in_proj, {v, h}, {p + "mixer_input"});
     out.a_projection = b.parameter(p + "gdn/a_projection", {heads, h}, {p + "mixer_input"});
     out.b_projection = b.parameter(p + "gdn/b_projection", {heads, h}, {p + "mixer_input"});
     out.a_log        = b.direct(p + "gdn/a_log", {heads}, QType::FP32);
@@ -80,14 +81,14 @@ MoeWeights bind_moe(Bindings& b, const TextConfig& config, const std::string& pr
 } // namespace
 
 BlockWeights bind_block(Bindings& b, const TextConfig& config, const std::string& p,
-                        MixerKind mixer) {
+                        MixerKind mixer, bool gdn_nvfp4) {
     BlockWeights out;
     out.input_norm          = b.direct(p + "input_norm", {config.hidden_size});
     out.post_attention_norm = b.direct(p + "post_attention_norm", {config.hidden_size});
     if (mixer == MixerKind::FullAttention) {
         out.mixer = bind_attention(b, config, p);
     } else {
-        out.mixer = bind_gdn(b, config, p);
+        out.mixer = bind_gdn(b, config, p, gdn_nvfp4);
     }
     if (const auto* dense = std::get_if<DenseConfig>(&config.ffn)) {
         out.ffn = bind_dense(b, config.hidden_size, dense->intermediate_size, p);
@@ -108,10 +109,21 @@ TextWeights bind_text(Bindings& b, const TextConfig& config, const LoadOptions& 
     out.output_head = b.parameter("text/output_head", {config.vocab_size, config.hidden_size},
                                   std::move(head_inputs));
     out.final_norm  = b.direct("text/final_norm", {config.hidden_size});
+    if (const auto selected = options.gdn_nvfp4_layer;
+        selected && *selected >= config.num_hidden_layers) {
+        throw artifact::ArtifactError("gdn_nvfp4_layer " + std::to_string(*selected) +
+                                      " is outside the layer range 0.." +
+                                      std::to_string(config.num_hidden_layers - 1));
+    }
     out.layers.reserve(config.num_hidden_layers);
     for (std::uint32_t i = 0; i < config.num_hidden_layers; ++i) {
-        out.layers.push_back(
-            bind_block(b, config, "text/layers/" + std::to_string(i) + "/", config.layer_types[i]));
+        const bool nvfp4 = options.gdn_nvfp4_layer && *options.gdn_nvfp4_layer == i;
+        if (nvfp4 && config.layer_types[i] != MixerKind::LinearAttention) {
+            throw artifact::ArtifactError("gdn_nvfp4_layer " + std::to_string(i) +
+                                          " is not a linear-attention (GDN) layer");
+        }
+        out.layers.push_back(bind_block(
+            b, config, "text/layers/" + std::to_string(i) + "/", config.layer_types[i], nvfp4));
     }
     return out;
 }
