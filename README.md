@@ -36,6 +36,7 @@ The selection is informed by a per-layer sensitivity study. The model repository
 These are workload-specific engineering changes, not claims of universal performance improvements.
 
 **Important:** Performance and evaluation results in the inherited documentation below refer to their original model profiles, not to GDNMix.
+---
 
 NInfer deliberately supports a closed set of model artifacts instead of acting as a general model
 runtime:
@@ -74,12 +75,11 @@ retain the same Text, Vision, MTP, prefix-reuse, CLI, and serving routes.
 ## Upstream
 
 NInfer is [Neroued](https://github.com/Neroued)'s project
-([Neroued/ninfer](https://github.com/Neroued/ninfer)). This repository is a fork of that
-project that adds native Windows support. The engine, model artifacts, API surface, and
+([Neroued/ninfer](https://github.com/Neroued/ninfer)). This repository is based on natpate/ninfer-windows, the Windows port of Neroued/ninfer. The dpstill-specific extensions are documented above. The engine, model artifacts, API surface, and
 published benchmarks are all upstream's work, and the upstream repository remains the
 reference implementation (this fork tracks upstream `master` with the additions below).
 
-What this fork adds on top of upstream:
+What natpate's Windows port adds on top of upstream:
 
 - **Native Windows 11 x64 build and run** — CMake with Visual Studio 2022 (MSVC), with
   [vcpkg](https://github.com/microsoft/vcpkg) resolving FFmpeg, libcurl, and zlib via the
